@@ -2,6 +2,7 @@ import argparse
 import csv
 import datetime
 import ignition
+import itertools
 import re
 import sys
 import urllib
@@ -28,7 +29,7 @@ class Outputter:
     def _output(self, subscriptions, out):
         raise NotImplementedError("Override!")
 
-class DateOutputter(Outputter):
+class ContinuousOutputter(Outputter):
     def _output(self, subscriptions, out):
         items = [item for sub in subscriptions for item in sub.get_last(self.n)]
         items.sort(key=lambda x: x.date, reverse=True)
@@ -41,6 +42,17 @@ class FeedOutputter(Outputter):
             out.write("## " + subscription.header + "\n")
             for item in subscription.get_last(self.n):
                 out.write(item.format() + "\n")
+            out.write("\n")
+
+class DateOutputter(Outputter):
+    def _output(self, subscriptions, out):
+        items = [item for sub in subscriptions for item in sub.get_last(self.n)]
+        items.sort(key=lambda x: x.date, reverse=True)
+        groups = itertools.groupby(items, key=lambda x: x.date.date())
+        for group in groups:
+            out.write("## " + group[0].isoformat() + "\n")
+            for item in group[1]:
+                out.write(item.format() + f" [{item.subscription_header}]\n")
             out.write("\n")
 
 class Item:
@@ -111,8 +123,10 @@ class Subscription:
 def create_logroll(args):
     if args.by_date:
         output = DateOutputter(args)
-    else:
+    elif args.by_feed:
         output = FeedOutputter(args)
+    else:
+        output = ContinuousOutputter(args)
     sub_list = [Subscription(x, args) for x in open(args.input_file).readlines() if x.startswith("=>")]
     for sub in sub_list:
         sub.fetch()
@@ -123,8 +137,9 @@ def get_parser():
     parser.add_argument("input_file", help="file with Gemini links to subscribed capsules")
     parser.add_argument("output_file", help="file to put subscriptions to")
     grouping = parser.add_mutually_exclusive_group(required=True)
-    grouping.add_argument("-d", "--by-date", action="store_true", help="show all entries sorted by date")
-    grouping.add_argument("-f", "--by-feed", action="store_true", help="show entries grouped by feed")
+    grouping.add_argument("-c", "--continuous", action="store_true", help="show all entries sorted by date")
+    grouping.add_argument("-f", "--by-feed", action="store_true", help="group entries by feed")
+    grouping.add_argument("-d", "--by-date", action="store_true", help="group entries by date")
     parser.add_argument("-H", "--header", default="# My subscriptions", help="header to include in subscription file")
     parser.add_argument("-F", "--footer", help="footer to include in subscription file")
     parser.add_argument("-v", "--verbose", action="store_true", help="display debugging information")
