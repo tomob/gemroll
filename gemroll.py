@@ -32,9 +32,9 @@ class Outputter:
 class ContinuousOutputter(Outputter):
     def _output(self, subscriptions, out):
         items = [item for sub in subscriptions for item in sub.get_last(self.n)]
-        items.sort(key=lambda x: x.date, reverse=True)
+        items.sort(key=lambda x: x.entry_date(), reverse=True)
         for item in items:
-            out.write(item.format() + f" [{item.subscription_header}]\n")
+            out.write(item.format() + f" [{item.subscription_name()}]\n")
 
 class FeedOutputter(Outputter):
     def _output(self, subscriptions, out):
@@ -47,22 +47,32 @@ class FeedOutputter(Outputter):
 class DateOutputter(Outputter):
     def _output(self, subscriptions, out):
         items = [item for sub in subscriptions for item in sub.get_last(self.n)]
-        items.sort(key=lambda x: x.date, reverse=True)
-        groups = itertools.groupby(items, key=lambda x: x.date.date())
+        items.sort(key=lambda x: x.entry_date(), reverse=True)
+        groups = itertools.groupby(items, key=lambda x: x.entry_date().date())
         for group in groups:
             out.write("## " + group[0].isoformat() + "\n")
             for item in group[1]:
-                out.write(item.format() + f" [{item.subscription_header}]\n")
+                out.write(item.format() + f" [{item.subscription_name()}]\n")
             out.write("\n")
 
 class Item:
+    def format(self):
+        return NotImplementedError("override me!")
+
+    def subscription_name(self):
+        return NotImplementedError("override me!")
+
+    def entry_date(self):
+        return NotImplementedError("override me!")
+
+class FetchedItem:
     def __init__(self, link_line, sub):
         self.main_url = sub.url
         _, self.url, self.header = link_line.split(maxsplit=2)
         self.date = datetime.datetime.strptime(self.header.split()[0], sub.date_format)
         self.subscription_header = sub.header
 
-    def absolute_link(self):
+    def _absolute_link(self):
         url = urllib.parse.urlparse(self.main_url)
         if self.url.startswith("gemini://"):
             return self.url
@@ -74,7 +84,28 @@ class Item:
         return "{before}/{link}"
 
     def format(self):
-        return f"=> {self.absolute_link()} {self.header.strip()}"
+        return f"=> {self._absolute_link()} {self.header.strip()}"
+
+    def subscription_name(self):
+        return self.subscription_header
+
+    def entry_date(self):
+        return self.date
+
+class ErrorItem:
+    def __init__(self, message, url):
+        self.error = message
+        self.url = url
+        self.date = datetime.datetime(1900,1,1)
+
+    def format(self):
+        return self.error
+
+    def subscription_name(self):
+        return self.url
+
+    def entry_date(self):
+        return self.date
 
 class Subscription:
     def __init__(self, subcription_line, args):
@@ -110,8 +141,8 @@ class Subscription:
         resp = ignition.request(self.url)
         if not resp.success():
             self._log(f"Failed to fetch {self.url}")
-            self.errors.append("Failed to fetch")
-        self.items = [Item(x, self) for x in resp.data().split("\n") if self._is_feed_entry(x)]
+            self.errors.append(ErrorItem(f"Failed to fetch {self.url}", self.url))
+        self.items = [FetchedItem(x, self) for x in resp.data().split("\n") if self._is_feed_entry(x)]
 
     def get_last(self, n):
         if len(self.items) == 0:
