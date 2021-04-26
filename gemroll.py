@@ -7,12 +7,41 @@ import re
 import sys
 import urllib
 
+class Selector:
+    class DateSelector:
+        def __init__(self, last):
+            self.since = datetime.datetime.now() - datetime.timedelta(days=last)
+
+        def __call__(self, sub):
+            if len(sub.items) == 0:
+                return sub.errors
+
+            sub.items.sort(key=lambda x: x.date, reverse=True)
+            return filter(lambda x: x.date >= self.since, sub.items)
+
+    class NumberSelector:
+        def __init__(self, n):
+            self.n = n
+
+        def __call__(self, sub):
+            if len(sub.items) == 0:
+                return sub.errors
+
+            sub.items.sort(key=lambda x: x.date, reverse=True)
+            return sub.items[:self.n]
+
+    def __init__(self, args):
+        if args.last:
+            self.select = self.DateSelector(args.last)
+        else:
+            self.select = self.NumberSelector(args.n)
+
 class Outputter:
     def __init__(self, args):
         self.output_file = args.output_file
         self.header = (args.header or "").replace("\\n", "\n")
         self.footer = (args.footer or "").replace("\\n", "\n")
-        self.n = args.n
+        self.selector = Selector(args)
 
     def write_header(self, out):
         out.write(self.header + "\n\n")
@@ -31,7 +60,7 @@ class Outputter:
 
 class ContinuousOutputter(Outputter):
     def _output(self, subscriptions, out):
-        items = [item for sub in subscriptions for item in sub.get_last(self.n)]
+        items = [item for sub in subscriptions for item in self.selector.select(sub)]
         items.sort(key=lambda x: x.entry_date(), reverse=True)
         for item in items:
             out.write(item.format() + f" [{item.subscription_name()}]\n")
@@ -40,13 +69,13 @@ class FeedOutputter(Outputter):
     def _output(self, subscriptions, out):
         for subscription in subscriptions:
             out.write("## " + subscription.header + "\n")
-            for item in subscription.get_last(self.n):
+            for item in self.selector.select(subscription):
                 out.write(item.format() + "\n")
             out.write("\n")
 
 class DateOutputter(Outputter):
     def _output(self, subscriptions, out):
-        items = [item for sub in subscriptions for item in sub.get_last(self.n)]
+        items = [item for sub in subscriptions for item in self.selector.select(sub)]
         items.sort(key=lambda x: x.entry_date(), reverse=True)
         groups = itertools.groupby(items, key=lambda x: x.entry_date().date())
         for group in groups:
@@ -144,13 +173,6 @@ class Subscription:
             self.errors.append(ErrorItem(f"Failed to fetch {self.url}", self.url))
         self.items = [FetchedItem(x, self) for x in resp.data().split("\n") if self._is_feed_entry(x)]
 
-    def get_last(self, n):
-        if len(self.items) == 0:
-            return self.errors
-
-        self.items.sort(key=lambda x: x.date, reverse=True)
-        return self.items[:n]
-
 def create_logroll(args):
     if args.by_date:
         output = DateOutputter(args)
@@ -174,7 +196,9 @@ def get_parser():
     parser.add_argument("-H", "--header", default="# My subscriptions", help="header to include in subscription file")
     parser.add_argument("-F", "--footer", help="footer to include in subscription file")
     parser.add_argument("-v", "--verbose", action="store_true", help="display debugging information")
-    parser.add_argument("-n", type=int, default=5, help="Number of items from each subscription (default: 5)")
+    select = parser.add_mutually_exclusive_group()
+    select.add_argument("-n", type=int, default=5, help="Number of items from each subscription (default: 5)")
+    select.add_argument("-l", "--last", type=int, help="All subscription's items from last LAST days")
 
     return parser
 
